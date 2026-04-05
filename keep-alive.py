@@ -24,6 +24,10 @@ import requests
 ENDPOINTS: list[str] = [
     "https://kaushal-nagrecha-ama-ai.hf.space",
     "https://kn-f1-dashboard.streamlit.app/",
+  "https://kn-top-5-companies-decision-board.streamlit.app",
+  "https://credit-access-in-uk-dashboard.streamlit.app",
+  "https://aly6040-dashboard-kn.streamlit.app",
+  "https://kn-dashboards-stockmarketanalysiscapitalizationdata.streamlit.app"
 ]
 
 # Maximum seconds to wait for Selenium wake-up confirmation
