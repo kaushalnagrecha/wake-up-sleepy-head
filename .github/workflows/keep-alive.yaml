@@ -10,7 +10,7 @@ on:
     branches:
       - main
     paths:
-      - "scripts/keep-alive.py"
+      - "keep-alive.py"
       - ".github/workflows/keep-alive.yml"
 
   # Allow manual trigger from Actions tab
@@ -42,7 +42,7 @@ jobs:
         run: pip install -r scripts/requirements.txt
 
       - name: Run keep-alive checks
-        run: python scripts/keep-alive.py
+        run: python keep-alive.py
         env:
           DISPLAY: ":99"
 
