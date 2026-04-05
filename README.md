@@ -1,5 +1,7 @@
 # Keep-Alive System
 
+[![Keep Apps Alive](https://github.com/kaushalnagrecha/wake-up-sleepy-head/actions/workflows/keep-alive.yaml/badge.svg)](https://github.com/kaushalnagrecha/wake-up-sleepy-head/actions/workflows/keep-alive.yaml)
+
 Automated health checker that prevents Streamlit and HuggingFace Spaces from sleeping due to inactivity.
 
 ## How It Works
