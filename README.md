@@ -59,7 +59,7 @@ To add or remove endpoints, edit the `ENDPOINTS` array.
 | Trigger | When |
 |---------|------|
 | Cron | Every 4 hours (`0 */4 * * *`) |
-| Push | On changes to `scripts/keep-alive.py` or the workflow file on `main` |
+| Push | On changes to `keep-alive.py` or the workflow file on `main` |
 | Manual | Via the **Actions** tab → **Keep Apps Alive** → **Run workflow** |
 
 ## File Structure
@@ -78,14 +78,14 @@ To add or remove endpoints, edit the `ENDPOINTS` array.
 
 ```bash
 # Install dependencies
-pip install -r scripts/requirements.txt
+pip install -r requirements.txt
 
 # Chrome + ChromeDriver must be installed for Selenium fallback
 # On macOS: brew install --cask google-chrome chromedriver
 # On Ubuntu: sudo apt install chromium-browser chromium-chromedriver
 
 # Run the script
-python scripts/keep-alive.py
+python keep-alive.py
 ```
 
 ## Logs
