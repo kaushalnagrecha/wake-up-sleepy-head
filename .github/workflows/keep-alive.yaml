@@ -1,0 +1,52 @@
+name: Keep Apps Alive
+
+on:
+  # Run every 4 hours
+  schedule:
+    - cron: "0 */4 * * *"
+
+  # Also run on push to main (so deploys trigger a warm-up)
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/keep-alive.py"
+      - ".github/workflows/keep-alive.yml"
+
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install ChromeDriver
+        uses: nanasess/setup-chromedriver@v2
+
+      - name: Install Python dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run keep-alive checks
+        run: python scripts/keep-alive.py
+        env:
+          DISPLAY: ":99"
+
+      - name: Report status
+        if: failure()
+        run: |
+          echo "::warning::One or more endpoints could not be woken up. Check the logs above."
