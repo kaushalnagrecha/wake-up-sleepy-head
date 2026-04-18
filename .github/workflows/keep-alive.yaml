@@ -1,9 +1,9 @@
 name: Keep Apps Alive
 
 on:
-  # Run every 4 hours
+  # Run every 30 minutes
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "*/30 * * * *"
 
   # Also run on push to main (so deploys trigger a warm-up)
   push:
