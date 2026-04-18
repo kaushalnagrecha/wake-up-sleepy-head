@@ -50,3 +50,17 @@ jobs:
         if: failure()
         run: |
           echo "::warning::One or more endpoints could not be woken up. Check the logs above."
+
+      - name: Send Message
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          MESSAGE="Build *${STATUS}* for "
+        
+          curl -X POST ${{ secrets.SLACK_URL }} \
+          -H 'Content-type: application/json; charset=utf-8' \
+          -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+          --data "{
+            \"channel\": \"${{ secrets.SLACK_CHANNEL_ID }}\",
+            \"text\": \"${TEXT}\"
+            }"
