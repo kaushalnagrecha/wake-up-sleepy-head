@@ -13,7 +13,7 @@ Automated health checker that prevents Streamlit and HuggingFace Spaces from sle
                        │
                        ▼
           ┌────────────────────────┐
-          │  HTTP GET each endpoint │
+          │  HTTP GET each endpoint│
           └────────────┬───────────┘
                        │
               ┌────────┴────────┐
