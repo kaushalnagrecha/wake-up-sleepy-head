@@ -60,6 +60,15 @@ STREAMLIT_SLEEP_MARKERS = [
     "zzzz",
 ]
 
+# Markers that appear while the app is booting (after wake click, before app loads)
+STREAMLIT_BOOTING_MARKERS = [
+    "please wait",
+    "waking up",
+    "this app is booting",
+    "starting up",
+    "app is starting",
+]
+
 HUGGINGFACE_SLEEP_MARKERS = [
     "this space is sleeping due to inactivity",
     "restart this space",
@@ -237,7 +246,7 @@ def find_wake_button(driver, platform: str):
 
 
 def app_content_loaded(driver, platform: str) -> bool:
-    """Check if the actual app content has loaded (not the sleep page)."""
+    """Check if the actual app content has loaded (not the sleep or booting page)."""
     try:
         ready_state = driver.execute_script("return document.readyState") or ""
     except Exception:
@@ -246,21 +255,39 @@ def app_content_loaded(driver, platform: str) -> bool:
     if ready_state not in ("interactive", "complete"):
         return False
 
-    # Make sure sleep markers are gone
     try:
         body_text = driver.find_element(By.TAG_NAME, "body").text.strip()
     except Exception:
         body_text = ""
 
+    body_lower = body_text.lower()
+
+    # Reject if sleep markers are still present
     markers = get_sleep_markers(platform)
-    if any(m in body_text.lower() for m in markers):
+    if any(m in body_lower for m in markers):
         return False
 
-    # Substantial body text means the app rendered
+    # Reject if Streamlit booting markers are present (transitional screen)
+    if platform == "streamlit":
+        if any(m in body_lower for m in STREAMLIT_BOOTING_MARKERS):
+            return False
+
+    # For Streamlit: require actual app DOM selectors, not just body text.
+    # The booting screen has text but none of these elements.
+    if platform == "streamlit":
+        content_sels = get_content_selectors(platform)
+        try:
+            return any(
+                driver.find_elements(By.CSS_SELECTOR, sel)
+                for sel in content_sels
+            )
+        except Exception:
+            return False
+
+    # For HuggingFace: body text length or content selectors
     if len(body_text) >= 40:
         return True
 
-    # Check for platform-specific content selectors in the DOM
     content_sels = get_content_selectors(platform)
     try:
         return any(
