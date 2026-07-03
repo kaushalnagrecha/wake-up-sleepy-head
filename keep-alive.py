@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-keep-alive.py — Health checker for Streamlit & HuggingFace Spaces.
+keep-alive.py - Health checker for Streamlit & HuggingFace Spaces.
 
 Strategy:
-  1. HTTP GET (requests) to fetch the page HTML — cheap pre-check.
+  1. HTTP GET (requests) to fetch the page HTML - cheap pre-check.
   2. Inspect HTML for sleep/inactive markers.
-  3. If asleep or inconclusive → launch headless Selenium with page_load_strategy="none",
-     poll for sleep markers, click the wake button, and verify app content loads.
+  3. If asleep or inconclusive → launch headless Selenium,
+     wait for JS to render, click the wake button, and verify app content loads.
   4. If awake → log and move on.
 
-Endpoints are stored in a simple list — add or remove URLs as needed.
+Endpoints are stored in a JSON dict keyed by platform - add or remove URLs as needed.
 """
 
 import sys
@@ -22,26 +22,33 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-ENDPOINTS: list[str] = [
-    "https://kaushal-nagrecha-ama-ai.hf.space",
-    "https://kn-f1-dashboard.streamlit.app/",
-  "https://credit-access-in-uk-dashboard.streamlit.app",
-  "https://aly6040-dashboard-kn.streamlit.app",
-  "https://kn-dashboards-stockmarketanalysiscapitalizationdata.streamlit.app",
-  "https://kn-top-5-companies-decision-board.streamlit.app"
-]
+ENDPOINTS: dict[str, list[str]] = {
+    "streamlit": [
+        "https://kn-f1-dashboard.streamlit.app/",
+        "https://credit-access-in-uk-dashboard.streamlit.app",
+        "https://aly6040-dashboard-kn.streamlit.app",
+        "https://kn-dashboards-stockmarketanalysiscapitalizationdata.streamlit.app",
+        "https://kn-top-5-companies-decision-board.streamlit.app",
+    ],
+    "huggingface": [
+        "https://kaushal-nagrecha-ama-ai.hf.space",
+    ],
+}
 
 # Timeouts (seconds)
 HTTP_TIMEOUT = 30
-BROWSER_PAGELOAD_TIMEOUT = 5          # Intentionally low — we use strategy "none"
-SITE_WAIT_TIMEOUT = 60                # Total time to wait for sleep/awake detection
-BUTTON_APPEAR_TIMEOUT = 15            # Time to wait for wake button after sleep detected
-WAKE_CONFIRM_TIMEOUT = 120            # Time to wait for app to come alive after clicking
+STREAMLIT_PAGELOAD_TIMEOUT = 60       # Streamlit needs full JS execution
+HF_PAGELOAD_TIMEOUT = 5              # HuggingFace - we use strategy "none"
+SITE_WAIT_TIMEOUT = 60               # Total time to wait for sleep/awake detection
+BUTTON_APPEAR_TIMEOUT = 20           # Time to wait for wake button after page load
+WAKE_CONFIRM_TIMEOUT = 120           # Time to wait for app to come alive after clicking
 
 # ---------------------------------------------------------------------------
 # Sleep-detection markers (all lowercase for comparison)
@@ -60,12 +67,13 @@ HUGGINGFACE_SLEEP_MARKERS = [
     '"stage":"paused"',
 ]
 
-# Streamlit wake button locators — data-testid selectors first (most reliable)
+# Streamlit wake button locators - XPATH text match is the most reliable
+# because the button text hasn't changed across Streamlit versions.
 STREAMLIT_WAKE_BUTTON_LOCATORS = [
+    (By.XPATH, "//button[contains(text(),'Yes, get this app back up')]"),
     (By.CSS_SELECTOR, "button[data-testid='wakeup-button-viewer']"),
     (By.CSS_SELECTOR, "button[data-testid='wakeup-button-owner']"),
     (By.CSS_SELECTOR, "button[data-testid='wakeup-button']"),
-    (By.XPATH, "//button[normalize-space()='Yes, get this app back up!']"),
 ]
 
 # HuggingFace restart button locators
@@ -75,13 +83,12 @@ HUGGINGFACE_RESTART_LOCATORS = [
     (By.XPATH, "//button[contains(text(), 'Restart')]"),
 ]
 
-# Streamlit app content selectors — presence of any means app is loaded
+# Streamlit app content selectors - presence of any means app is loaded
 STREAMLIT_CONTENT_SELECTORS = [
     "[data-testid='stAppViewContainer']",
     "[data-testid='stSidebar']",
     "[data-testid='stHeader']",
     "section.main",
-    "main",
 ]
 
 # HuggingFace app content selectors
@@ -106,14 +113,6 @@ log = logging.getLogger("keep-alive")
 # ---------------------------------------------------------------------------
 # Platform helpers
 # ---------------------------------------------------------------------------
-
-def classify_endpoint(url: str) -> str:
-    if "streamlit" in url:
-        return "streamlit"
-    if "hf.space" in url or "huggingface.co" in url:
-        return "huggingface"
-    return "unknown"
-
 
 def get_sleep_markers(platform: str) -> list[str]:
     if platform == "streamlit":
@@ -143,6 +142,11 @@ def http_precheck(url: str, platform: str) -> bool | None:
       True  → definitely asleep
       False → definitely awake
       None  → inconclusive (need Selenium)
+
+    NOTE: Streamlit sleeping apps return HTTP 200 with a static HTML shell.
+    The sleep markers are rendered client-side by JS, so this pre-check will
+    almost always return None for Streamlit. That's expected - Selenium
+    handles the actual detection and wake-up.
     """
     try:
         resp = requests.get(url, timeout=HTTP_TIMEOUT, allow_redirects=True)
@@ -151,23 +155,37 @@ def http_precheck(url: str, platform: str) -> bool | None:
         log.warning("  HTTP fetch failed: %s", exc)
         return None
 
-    log.info("  HTTP %d — body length: %d chars", resp.status_code, len(resp.text))
+    log.info("  HTTP %d - body length: %d chars", resp.status_code, len(resp.text))
 
-    # Check sleep markers
+    # Check sleep markers in raw HTML
     markers = get_sleep_markers(platform)
     sleep_hits = sum(1 for m in markers if m in html)
     if sleep_hits > 0:
-        log.info("  Found %d sleep marker(s) in HTTP response — ASLEEP", sleep_hits)
+        log.info("  Found %d sleep marker(s) in HTTP response - ASLEEP", sleep_hits)
         return True
 
-    # Check content markers (lowercase match in raw HTML)
+    # For Streamlit: a small response body (~4KB) with no sleep markers
+    # is almost certainly the sleeping HTML shell - return None (inconclusive)
+    # rather than False, so Selenium can do the real check.
+    if platform == "streamlit" and len(resp.text) < 10_000:
+        log.info("  Small Streamlit response (%d chars) with no markers - likely sleeping shell, INCONCLUSIVE", len(resp.text))
+        return None
+
+    # Check for platform content markers in raw HTML
     content_sels = get_content_selectors(platform)
     for sel in content_sels:
-        if sel.lower().strip("[].'\"#") in html:
-            log.info("  Found content marker '%s' — AWAKE", sel)
+        # Extract the meaningful part of the CSS selector for a substring search
+        # e.g. "[data-testid='stAppViewContainer']" -> "stappviewcontainer"
+        tag = sel.lower()
+        for ch in "[].'\"#=":
+            tag = tag.replace(ch, " ")
+        # Use the longest token as the search key
+        tokens = [t for t in tag.split() if len(t) > 3]
+        if any(token in html for token in tokens):
+            log.info("  Found content marker '%s' - AWAKE", sel)
             return False
 
-    log.info("  No definitive markers in HTTP response — INCONCLUSIVE")
+    log.info("  No definitive markers in HTTP response - INCONCLUSIVE")
     return None
 
 
@@ -175,10 +193,20 @@ def http_precheck(url: str, platform: str) -> bool | None:
 # Selenium driver
 # ---------------------------------------------------------------------------
 
-def create_driver() -> webdriver.Chrome:
-    """Headless Chrome with page_load_strategy='none' — don't block on full load."""
+def create_driver(platform: str) -> webdriver.Chrome:
+    """
+    Headless Chrome.
+    - Streamlit: normal page_load_strategy (needs full JS execution to render).
+    - HuggingFace: page_load_strategy='none' (poll-based approach).
+    """
     options = Options()
-    options.page_load_strategy = "none"
+
+    # KEY FIX: Streamlit's sleep page is a JS SPA - we MUST let JS execute.
+    # Using strategy "none" + window.stop() kills the rendering pipeline.
+    if platform == "huggingface":
+        options.page_load_strategy = "none"
+    # else: default ("normal") - waits for document load, JS executes fully
+
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -206,21 +234,6 @@ def find_wake_button(driver, platform: str):
         except Exception:
             continue
     return None
-
-
-def sleep_marker_present(driver, platform: str) -> bool:
-    """Check if sleep markers are visible in the live DOM."""
-    # Direct button check first — most reliable signal
-    if find_wake_button(driver, platform) is not None:
-        return True
-
-    try:
-        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
-    except Exception:
-        body_text = ""
-
-    markers = get_sleep_markers(platform)
-    return any(m in body_text for m in markers)
 
 
 def app_content_loaded(driver, platform: str) -> bool:
@@ -283,68 +296,158 @@ def click_button_safe(driver, button) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Selenium wake-up (core logic)
+# Streamlit-specific wake flow (WebDriverWait-based)
 # ---------------------------------------------------------------------------
 
-def wake_with_selenium(url: str, platform: str) -> bool:
+def wake_streamlit(url: str) -> bool:
     """
-    Launch headless Chrome, detect sleep state, click wake button, verify.
-    Returns True if the app is awake or was successfully woken.
+    Streamlit-specific wake flow:
+      1. Load the page normally (let JS render the sleep UI).
+      2. Use WebDriverWait to look for the wake button.
+      3. If found → click it, then wait for app content.
+      4. If not found within timeout → app is already awake.
     """
     driver = None
     try:
-        driver = create_driver()
-        driver.set_page_load_timeout(BROWSER_PAGELOAD_TIMEOUT)
+        driver = create_driver("streamlit")
+        driver.set_page_load_timeout(STREAMLIT_PAGELOAD_TIMEOUT)
+
+        log.info("  Selenium: Loading %s (normal strategy, letting JS render)", url)
+        try:
+            driver.get(url)
+        except TimeoutException:
+            log.warning("  Selenium: Page load timed out at %ds - continuing with partial load", STREAMLIT_PAGELOAD_TIMEOUT)
+
+        # Wait a beat for any remaining JS to settle
+        time.sleep(3)
+
+        # Check: is the wake button present?
+        log.info("  Selenium: Looking for wake button (up to %ds)...", BUTTON_APPEAR_TIMEOUT)
+        wake_button = None
+        try:
+            # The primary locator - text match is the most reliable across versions
+            wake_button = WebDriverWait(driver, BUTTON_APPEAR_TIMEOUT).until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, "//button[contains(text(),'Yes, get this app back up')]")
+                )
+            )
+        except TimeoutException:
+            # No wake button → check if the app is already loaded
+            pass
+
+        if wake_button is None:
+            # Try the other locators briefly
+            for locator in STREAMLIT_WAKE_BUTTON_LOCATORS[1:]:
+                try:
+                    wake_button = WebDriverWait(driver, 3).until(
+                        EC.element_to_be_clickable(locator)
+                    )
+                    break
+                except TimeoutException:
+                    continue
+
+        if wake_button is not None:
+            log.info("  Selenium: Wake button found - app is ASLEEP. Clicking...")
+            clicked = click_button_safe(driver, wake_button)
+            if not clicked:
+                log.warning("  Selenium: Failed to click wake button")
+                return False
+
+            log.info("  Selenium: Wake button clicked. Waiting up to %ds for app to boot...", WAKE_CONFIRM_TIMEOUT)
+
+            # Wait for the button to disappear (indicates wake process started)
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.invisibility_of_element_located(
+                        (By.XPATH, "//button[contains(text(),'Yes, get this app back up')]")
+                    )
+                )
+                log.info("  Selenium: Wake button disappeared - app is booting")
+            except TimeoutException:
+                log.warning("  Selenium: Wake button still visible after click - may not have registered")
+
+            # Now wait for actual app content
+            wake_deadline = time.time() + WAKE_CONFIRM_TIMEOUT
+            while time.time() < wake_deadline:
+                if app_content_loaded(driver, "streamlit"):
+                    log.info("  Selenium: App is now AWAKE!")
+                    return True
+                time.sleep(3)
+
+            # Click was sent - app may still be booting (cold starts can be slow)
+            log.warning("  Selenium: Timed out waiting for content, but click was sent (app may still be booting)")
+            return True
+
+        else:
+            # No wake button found - app should already be awake
+            if app_content_loaded(driver, "streamlit"):
+                log.info("  Selenium: App is already AWAKE (no wake button, content loaded)")
+                return True
+            else:
+                # Edge case: neither button nor content. Maybe the page is still loading.
+                log.info("  Selenium: No wake button found. Waiting a bit longer for content...")
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    if app_content_loaded(driver, "streamlit"):
+                        log.info("  Selenium: App is AWAKE (content appeared after extra wait)")
+                        return True
+                    time.sleep(2)
+                log.warning("  Selenium: No wake button and no app content - unclear state")
+                return False
+
+    except Exception as exc:
+        log.error("  Selenium error: %s", exc)
+        return False
+    finally:
+        if driver:
+            driver.quit()
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace wake flow (poll-based, original logic)
+# ---------------------------------------------------------------------------
+
+def wake_huggingface(url: str) -> bool:
+    """
+    HuggingFace wake flow - uses page_load_strategy='none' and polling.
+    """
+    platform = "huggingface"
+    driver = None
+    try:
+        driver = create_driver(platform)
+        driver.set_page_load_timeout(HF_PAGELOAD_TIMEOUT)
 
         log.info("  Selenium: Loading %s (strategy=none)", url)
         try:
             driver.get(url)
         except (TimeoutException, WebDriverException):
-            # Expected with strategy "none" + low timeout — stop loading gracefully
             try:
                 driver.execute_script("window.stop();")
             except Exception:
                 pass
 
-        # Phase 1: Poll until we detect sleep markers OR app content
         log.info("  Selenium: Polling for up to %ds...", SITE_WAIT_TIMEOUT)
         deadline = time.time() + SITE_WAIT_TIMEOUT
 
         while time.time() < deadline:
             # Is it asleep?
-            if sleep_marker_present(driver, platform):
-                log.info("  Selenium: Sleep markers detected — looking for wake button")
-
-                # Wait for the wake button to become clickable
-                btn_deadline = time.time() + BUTTON_APPEAR_TIMEOUT
-                clicked = False
-
-                while time.time() < btn_deadline:
-                    btn = find_wake_button(driver, platform)
-                    if btn is not None:
-                        log.info("  Selenium: Found wake button — clicking")
-                        clicked = click_button_safe(driver, btn)
-                        if clicked:
-                            log.info("  Selenium: Wake button clicked successfully")
-                        break
-                    time.sleep(1)
-
+            btn = find_wake_button(driver, platform)
+            if btn is not None:
+                log.info("  Selenium: Sleep detected - clicking restart button")
+                clicked = click_button_safe(driver, btn)
                 if not clicked:
-                    log.warning("  Selenium: Wake button never appeared or click failed")
+                    log.warning("  Selenium: Restart button click failed")
                     return False
 
-                # Phase 2: Wait for the app to actually come alive
                 log.info("  Selenium: Waiting up to %ds for app to boot...", WAKE_CONFIRM_TIMEOUT)
                 wake_deadline = time.time() + WAKE_CONFIRM_TIMEOUT
-
                 while time.time() < wake_deadline:
                     if app_content_loaded(driver, platform):
                         log.info("  Selenium: App is now AWAKE!")
                         return True
                     time.sleep(3)
 
-                # Click was sent — app may still be booting
-                log.warning("  Selenium: Timed out waiting for content after click (app may still be booting)")
+                log.warning("  Selenium: Timed out after click (app may still be booting)")
                 return True
 
             # Is it already awake?
@@ -354,7 +457,7 @@ def wake_with_selenium(url: str, platform: str) -> bool:
 
             time.sleep(1)
 
-        log.warning("  Selenium: Timed out — neither sleep markers nor app content detected")
+        log.warning("  Selenium: Timed out - neither sleep markers nor app content detected")
         return False
 
     except Exception as exc:
@@ -369,9 +472,8 @@ def wake_with_selenium(url: str, platform: str) -> bool:
 # Main check loop
 # ---------------------------------------------------------------------------
 
-def check_endpoint(url: str) -> bool:
+def check_endpoint(url: str, platform: str) -> bool:
     """Check a single endpoint. Returns True if awake or successfully woken."""
-    platform = classify_endpoint(url)
     log.info("Checking: %s [platform=%s]", url, platform)
 
     # Step 1: Lightweight HTTP pre-check
@@ -382,25 +484,30 @@ def check_endpoint(url: str) -> bool:
         return True
 
     if precheck is True:
-        log.info("  App is ASLEEP (confirmed via HTTP) — launching Selenium")
+        log.info("  App is ASLEEP (confirmed via HTTP) - launching Selenium")
     else:
-        log.info("  Status inconclusive — launching Selenium to verify")
+        log.info("  Status inconclusive - launching Selenium to verify")
 
-    # Step 2: Selenium wake-up
-    return wake_with_selenium(url, platform)
+    # Step 2: Platform-specific Selenium wake-up
+    if platform == "streamlit":
+        return wake_streamlit(url)
+    else:
+        return wake_huggingface(url)
 
 
 def main() -> int:
+    total = sum(len(urls) for urls in ENDPOINTS.values())
     log.info("=" * 60)
-    log.info("Keep-Alive Check — %d endpoint(s)", len(ENDPOINTS))
+    log.info("Keep-Alive Check - %d endpoint(s)", total)
     log.info("=" * 60)
 
     results: dict[str, bool] = {}
 
-    for url in ENDPOINTS:
-        success = check_endpoint(url)
-        results[url] = success
-        log.info("")
+    for platform, urls in ENDPOINTS.items():
+        for url in urls:
+            success = check_endpoint(url, platform)
+            results[url] = success
+            log.info("")
 
     # Summary
     log.info("=" * 60)
@@ -417,7 +524,7 @@ def main() -> int:
         log.info("All endpoints are alive!")
         return 0
     else:
-        log.warning("Some endpoints could not be woken — check logs above")
+        log.warning("Some endpoints could not be woken - check logs above")
         return 1
 
 
