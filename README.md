@@ -48,13 +48,13 @@ Automated health checker that prevents Streamlit and HuggingFace Spaces from sle
 Endpoints are stored as a simple Python list in `scripts/keep-alive.py`:
 
 ```python
-ENDPOINTS: list[str] = [
-    "https://kaushal-nagrecha-ama-ai.hf.space",
-    "https://kn-f1-dashboard.streamlit.app/",
+ENDPOINTS: dict[str, list[str]] = {
+    "huggingface": ["https://kaushal-nagrecha-ama-ai.hf.space"],
+    "streamlit": ["https://kn-f1-dashboard.streamlit.app/"],
 ]
 ```
 
-To add or remove endpoints, edit the `ENDPOINTS` array.
+To add or remove endpoints, edit the `ENDPOINTS` dictonary.
 
 ## Schedule
 
