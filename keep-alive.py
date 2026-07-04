@@ -44,11 +44,11 @@ ENDPOINTS: dict[str, list[str]] = {
 
 # Timeouts (seconds)
 HTTP_TIMEOUT = 30
-STREAMLIT_PAGELOAD_TIMEOUT = 60       # Streamlit needs full JS execution
+STREAMLIT_PAGELOAD_TIMEOUT = 180       # Streamlit needs full JS execution
 HF_PAGELOAD_TIMEOUT = 5              # HuggingFace - we use strategy "none"
-SITE_WAIT_TIMEOUT = 60               # Total time to wait for sleep/awake detection
-BUTTON_APPEAR_TIMEOUT = 20           # Time to wait for wake button after page load
-WAKE_CONFIRM_TIMEOUT = 120           # Time to wait for app to come alive after clicking
+SITE_WAIT_TIMEOUT = 180               # Total time to wait for sleep/awake detection
+BUTTON_APPEAR_TIMEOUT = 60           # Time to wait for wake button after page load
+WAKE_CONFIRM_TIMEOUT = 180           # Time to wait for app to come alive after clicking
 
 # ---------------------------------------------------------------------------
 # Sleep-detection markers (all lowercase for comparison)
