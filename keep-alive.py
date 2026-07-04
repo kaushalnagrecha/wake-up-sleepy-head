@@ -5,9 +5,9 @@ keep-alive.py - Health checker for Streamlit & HuggingFace Spaces.
 Strategy:
   1. HTTP GET (requests) to fetch the page HTML - cheap pre-check.
   2. Inspect HTML for sleep/inactive markers.
-  3. If asleep or inconclusive → launch headless Selenium,
+  3. If asleep or inconclusive -> launch headless Selenium,
      wait for JS to render, click the wake button, and verify app content loads.
-  4. If awake → log and move on.
+  4. If awake -> log and move on.
 
 Endpoints are stored in a JSON dict keyed by platform - add or remove URLs as needed.
 """
@@ -20,7 +20,6 @@ import requests
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -44,11 +43,11 @@ ENDPOINTS: dict[str, list[str]] = {
 
 # Timeouts (seconds)
 HTTP_TIMEOUT = 30
-STREAMLIT_PAGELOAD_TIMEOUT = 180       # Streamlit needs full JS execution
+STREAMLIT_PAGELOAD_TIMEOUT = 60       # Streamlit needs full JS execution
 HF_PAGELOAD_TIMEOUT = 5              # HuggingFace - we use strategy "none"
-SITE_WAIT_TIMEOUT = 180               # Total time to wait for sleep/awake detection
-BUTTON_APPEAR_TIMEOUT = 60           # Time to wait for wake button after page load
-WAKE_CONFIRM_TIMEOUT = 180           # Time to wait for app to come alive after clicking
+SITE_WAIT_TIMEOUT = 60               # Total time to wait for sleep/awake detection
+BUTTON_APPEAR_TIMEOUT = 20           # Time to wait for wake button after page load
+WAKE_CONFIRM_TIMEOUT = 120           # Time to wait for app to come alive after clicking
 
 # ---------------------------------------------------------------------------
 # Sleep-detection markers (all lowercase for comparison)
@@ -148,9 +147,9 @@ def get_content_selectors(platform: str) -> list[str]:
 def http_precheck(url: str, platform: str) -> bool | None:
     """
     Lightweight HTTP check. Returns:
-      True  → definitely asleep
-      False → definitely awake
-      None  → inconclusive (need Selenium)
+      True  -> definitely asleep
+      False -> definitely awake
+      None  -> inconclusive (need Selenium)
 
     NOTE: Streamlit sleeping apps return HTTP 200 with a static HTML shell.
     The sleep markers are rendered client-side by JS, so this pre-check will
@@ -272,17 +271,34 @@ def app_content_loaded(driver, platform: str) -> bool:
         if any(m in body_lower for m in STREAMLIT_BOOTING_MARKERS):
             return False
 
-    # For Streamlit: require actual app DOM selectors, not just body text.
-    # The booting screen has text but none of these elements.
+    # For Streamlit: the actual app lives inside an iframe.
+    # Check the top-level document first, then switch into any iframes.
     if platform == "streamlit":
         content_sels = get_content_selectors(platform)
+
+        # Check top-level document
         try:
-            return any(
-                driver.find_elements(By.CSS_SELECTOR, sel)
-                for sel in content_sels
-            )
+            if any(driver.find_elements(By.CSS_SELECTOR, sel) for sel in content_sels):
+                return True
         except Exception:
-            return False
+            pass
+
+        # Check inside iframes (Streamlit Community Cloud embeds the app in one)
+        try:
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            for iframe in iframes:
+                try:
+                    driver.switch_to.frame(iframe)
+                    if any(driver.find_elements(By.CSS_SELECTOR, sel) for sel in content_sels):
+                        driver.switch_to.default_content()
+                        return True
+                    driver.switch_to.default_content()
+                except Exception:
+                    driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        return False
 
     # For HuggingFace: body text length or content selectors
     if len(body_text) >= 40:
@@ -331,8 +347,8 @@ def wake_streamlit(url: str) -> bool:
     Streamlit-specific wake flow:
       1. Load the page normally (let JS render the sleep UI).
       2. Use WebDriverWait to look for the wake button.
-      3. If found → click it, then wait for app content.
-      4. If not found within timeout → app is already awake.
+      3. If found -> click it, then wait for app content.
+      4. If not found within timeout -> app is already awake.
     """
     driver = None
     try:
@@ -359,7 +375,7 @@ def wake_streamlit(url: str) -> bool:
                 )
             )
         except TimeoutException:
-            # No wake button → check if the app is already loaded
+            # No wake button -> check if the app is already loaded
             pass
 
         if wake_button is None:
