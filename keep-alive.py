@@ -12,6 +12,7 @@ Strategy:
 Endpoints are stored in a JSON dict keyed by platform - add or remove URLs as needed.
 """
 
+import os
 import sys
 import time
 import logging
@@ -208,6 +209,12 @@ def create_driver(platform: str) -> webdriver.Chrome:
     - HuggingFace: page_load_strategy='none' (poll-based approach).
     """
     options = Options()
+
+    # Use the Chrome binary from setup-chrome if available,
+    # otherwise fall back to system default.
+    chrome_bin = os.environ.get("CHROME_BIN")
+    if chrome_bin:
+        options.binary_location = chrome_bin
 
     # KEY FIX: Streamlit's sleep page is a JS SPA - we MUST let JS execute.
     # Using strategy "none" + window.stop() kills the rendering pipeline.
