@@ -24,6 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Chrome and ChromeDriver
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
@@ -34,6 +35,7 @@ jobs:
         run: python keep-alive.py
         env:
           DISPLAY: ":99"
+          CHROME_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
       - name: Report status
         if: failure()
         run: |
