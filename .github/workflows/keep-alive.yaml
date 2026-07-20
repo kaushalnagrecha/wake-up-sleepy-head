@@ -41,7 +41,7 @@ jobs:
         run: |
           echo "::warning::One or more endpoints could not be woken up. Check the logs above."
       - name: Send Message
-        if: always()
+        if: failure()
         run: |
           STATUS="${{ job.status }}"
           MESSAGE="Build *${STATUS}* for keep-alive check"
