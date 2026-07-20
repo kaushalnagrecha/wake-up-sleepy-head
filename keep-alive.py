@@ -231,7 +231,18 @@ def create_driver(platform: str) -> webdriver.Chrome:
     options.add_argument("--disable-sync")
     options.add_argument("--dns-prefetch-disable")
     options.add_argument("--window-size=1280,900")
-    return webdriver.Chrome(options=options)
+
+    # Attempt to resolve Chrome & ChromeDriver version mismatch
+    try:
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+        
+        # ChromeDriverManager installs the driver that matches the detected Chrome version
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=options)
+    except Exception as exc:
+        log.warning("  Could not use ChromeDriverManager to resolve version mismatch, falling back to default: %s", exc)
+        return webdriver.Chrome(options=options)
 
 
 # ---------------------------------------------------------------------------
